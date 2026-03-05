@@ -60,19 +60,19 @@ local automationEnabled = true
 print("[Ronix] Full Automation Script Started.")
 print("[Ronix] Loaded " .. #sortedAxes .. " purchasable axes.")
 
+local lastCollectTime = 0
 local lastBuyAttempt = 0
-local hitDelay = 0.5 -- How often to hit a tree (delay between hitting a single tree)
+local hitDelay = 1.0 -- SAFE Rate Limit: 1 hit per second max!
 
 task.spawn(function()
     while automationEnabled do
-        -- A longer wait interval (0.5 seconds) to avoid abnormal packet frequency errors
-        task.wait(0.5)
+        -- A safe interval to avoid abnormal packet frequency
+        task.wait(hitDelay)
 
         local success, err = pcall(function()
             -- 1. Auto-Hit Trees (using the internal ByteNet packet)
-            -- To avoid rate limit / kick, we should only hit a few trees per tick or just one tree
+            -- ONLY HIT ONE TREE PER INTERVAL
             local trees = CollectionService:GetTagged("Tree")
-            local hitCount = 0
 
             for _, tree in ipairs(trees) do
                 -- Skip growing trees
@@ -84,31 +84,34 @@ task.spawn(function()
                                 ["seed"] = seed,
                                 ["prog"] = 100
                             })
-
-                            hitCount = hitCount + 1
-                            -- Hit max 2 trees per loop to avoid rate limit flags
-                            if hitCount >= 2 then
-                                break
-                            end
+                            -- Only send 1 packet per interval
+                            break
                         end
                     end
                 end
             end
 
-            -- 2. Auto-Collect All and Sell
-            -- Don't need to send this constantly. We'll only send sell/collect if we hit a tree.
-            if Packets.collect_all and Packets.collect_all.send then
-                Packets.collect_all.send()
-            end
+            local now = os.clock()
 
-            if Packets.sell and Packets.sell.send then
-                Packets.sell.send(true)
+            -- 2. Auto-Collect All and Sell
+            -- Don't send this every hit! Only every 10 seconds.
+            if now - lastCollectTime >= 10 then
+                lastCollectTime = now
+                if Packets.collect_all and Packets.collect_all.send then
+                    Packets.collect_all.send()
+                end
+
+                if Packets.sell and Packets.sell.send then
+                    -- wait slightly between packet sends to be extra safe
+                    task.wait(0.2)
+                    Packets.sell.send(true)
+                end
             end
 
             -- 3. Auto-Buy Best Axe
-            -- We only want to check the shop periodically to prevent market_buy packet spam
-            if os.clock() - lastBuyAttempt >= 5 then -- Check every 5 seconds
-                lastBuyAttempt = os.clock()
+            -- Check shop every 30 seconds to prevent market_buy packet spam
+            if now - lastBuyAttempt >= 30 then
+                lastBuyAttempt = now
                 local currentBalance = getBalance()
                 for i = #sortedAxes, 1, -1 do
                     local axe = sortedAxes[i]
@@ -132,4 +135,4 @@ task.spawn(function()
     end
 end)
 
-return "[Ronix] Automation is running in the background with Rate-Limit protection."
+return "[Ronix] Automation is running in the background with STRICT Rate-Limit protection."
