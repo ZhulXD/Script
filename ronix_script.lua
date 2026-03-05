@@ -52,7 +52,6 @@ local function getBalance()
         end
     end
 
-    -- Second fallback: check the local player's attributes or UI if needed (omitted for brevity)
     return 0
 end
 
@@ -61,56 +60,68 @@ local automationEnabled = true
 print("[Ronix] Full Automation Script Started.")
 print("[Ronix] Loaded " .. #sortedAxes .. " purchasable axes.")
 
+local lastBuyAttempt = 0
+local hitDelay = 0.5 -- How often to hit a tree (delay between hitting a single tree)
+
 task.spawn(function()
     while automationEnabled do
-        task.wait(0.1) -- small delay to prevent crashing the client
+        -- A longer wait interval (0.5 seconds) to avoid abnormal packet frequency errors
+        task.wait(0.5)
 
         local success, err = pcall(function()
             -- 1. Auto-Hit Trees (using the internal ByteNet packet)
+            -- To avoid rate limit / kick, we should only hit a few trees per tick or just one tree
             local trees = CollectionService:GetTagged("Tree")
+            local hitCount = 0
+
             for _, tree in ipairs(trees) do
-                -- Skip growing trees and check if the tree model has a seed
+                -- Skip growing trees
                 if tree:GetAttribute("IsGrowing") ~= true then
                     local seed = tree:GetAttribute("Seed")
                     if seed then
-                        -- The 'prog' value is usually perfect swing (100)
                         if Packets.axe_hit and Packets.axe_hit.send then
                             Packets.axe_hit.send({
                                 ["seed"] = seed,
                                 ["prog"] = 100
                             })
+
+                            hitCount = hitCount + 1
+                            -- Hit max 2 trees per loop to avoid rate limit flags
+                            if hitCount >= 2 then
+                                break
+                            end
                         end
                     end
                 end
             end
 
             -- 2. Auto-Collect All and Sell
-            -- Call collect_all (the value is 'nothing', so empty args work)
+            -- Don't need to send this constantly. We'll only send sell/collect if we hit a tree.
             if Packets.collect_all and Packets.collect_all.send then
                 Packets.collect_all.send()
             end
 
-            -- Call sell (boolean value to sell or not, passing true)
             if Packets.sell and Packets.sell.send then
                 Packets.sell.send(true)
             end
 
             -- 3. Auto-Buy Best Axe
-            local currentBalance = getBalance()
-            for i = #sortedAxes, 1, -1 do
-                local axe = sortedAxes[i]
-                -- If we have enough currency to afford the best possible axe
-                if currentBalance >= axe.price then
-                    -- ToolClassIndex 1 represents axes in market_buy
-                    if Packets.market_buy and Packets.market_buy.send then
-                        Packets.market_buy.send({
-                            ["toolClassIndex"] = 1,
-                            ["product"] = axe.id
-                        })
+            -- We only want to check the shop periodically to prevent market_buy packet spam
+            if os.clock() - lastBuyAttempt >= 5 then -- Check every 5 seconds
+                lastBuyAttempt = os.clock()
+                local currentBalance = getBalance()
+                for i = #sortedAxes, 1, -1 do
+                    local axe = sortedAxes[i]
+                    if currentBalance >= axe.price then
+                        -- ToolClassIndex 1 represents axes
+                        if Packets.market_buy and Packets.market_buy.send then
+                            Packets.market_buy.send({
+                                ["toolClassIndex"] = 1,
+                                ["product"] = axe.id
+                            })
+                        end
+                        break
                     end
-                    -- Break out of the loop since we want to try buying the highest one we can afford
-                    -- The game likely handles duplicate purchases or we just keep buying the best one
-                    break
                 end
             end
         end)
@@ -121,5 +132,4 @@ task.spawn(function()
     end
 end)
 
--- Return string so executor can see it successfully loaded
-return "[Ronix] Automation is running in the background."
+return "[Ronix] Automation is running in the background with Rate-Limit protection."
